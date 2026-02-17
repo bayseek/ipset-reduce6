@@ -34,6 +34,14 @@ Options:
   --ipset-reduce-entries ENTRIES minimum acceptable entries        (default 16384)
   --only-v6 / -6                process only IPv6 prefixes
   --only-v4 / -4                process only IPv4 prefixes
+  --print-prefix STRING         print STRING before each output entry
+                                (sets both --print-prefix-ips and -nets)
+  --print-prefix-ips STRING     print STRING before single-host entries only
+  --print-prefix-nets STRING    print STRING before subnet entries only
+  --print-suffix STRING         print STRING after each output entry
+                                (sets both --print-suffix-ips and -nets)
+  --print-suffix-ips STRING     print STRING after single-host entries only
+  --print-suffix-nets STRING    print STRING after subnet entries only
   --print-stats / -v            print reduction statistics to stderr
   --help / -h                   show this help and exit
 """
@@ -283,11 +291,35 @@ def main() -> None:
     parser.add_argument("-v", "--print-stats", action="store_true",
                         help="print reduction statistics to stderr")
 
+    # -- print-prefix / print-suffix (iprange feature parity) --
+    parser.add_argument("--print-prefix", default=None, metavar="STRING",
+                        help="print STRING before each IP or CIDR "
+                             "(sets both --print-prefix-ips and --print-prefix-nets)")
+    parser.add_argument("--print-prefix-ips", default="", metavar="STRING",
+                        help="print STRING before single-host entries (/32 or /128)")
+    parser.add_argument("--print-prefix-nets", default="", metavar="STRING",
+                        help="print STRING before subnet entries")
+    parser.add_argument("--print-suffix", default=None, metavar="STRING",
+                        help="print STRING after each IP or CIDR "
+                             "(sets both --print-suffix-ips and --print-suffix-nets)")
+    parser.add_argument("--print-suffix-ips", default="", metavar="STRING",
+                        help="print STRING after single-host entries (/32 or /128)")
+    parser.add_argument("--print-suffix-nets", default="", metavar="STRING",
+                        help="print STRING after subnet entries")
+
     parser.add_argument("files", nargs="*", metavar="FILE",
                         help="input files (default: stdin)")
 
     args = parser.parse_args()
     verbose: bool = args.print_stats
+
+    # resolve shorthand --print-prefix / --print-suffix
+    if args.print_prefix is not None:
+        args.print_prefix_ips = args.print_prefix
+        args.print_prefix_nets = args.print_prefix
+    if args.print_suffix is not None:
+        args.print_suffix_ips = args.print_suffix
+        args.print_suffix_nets = args.print_suffix
 
     # ---- read input ----
     raw_lines: List[str] = []
@@ -370,9 +402,19 @@ def main() -> None:
             for sub in split_net_enabled(net, enabled6):
                 results.append(str(sub))
 
-    # ---- output ----
+    # ---- output (with prefix/suffix decoration) ----
+    pfx_ips  = args.print_prefix_ips
+    pfx_nets = args.print_prefix_nets
+    sfx_ips  = args.print_suffix_ips
+    sfx_nets = args.print_suffix_nets
+
     for r in results:
-        print(r)
+        net = ipaddress.ip_network(r, strict=False)
+        is_host = (net.prefixlen == net.max_prefixlen)  # /32 or /128
+        if is_host:
+            print(f"{pfx_ips}{r}{sfx_ips}")
+        else:
+            print(f"{pfx_nets}{r}{sfx_nets}")
 
 
 if __name__ == "__main__":
