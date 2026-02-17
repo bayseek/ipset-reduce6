@@ -28,10 +28,11 @@ Usage:
   reduces the number of distinct prefix-lengths, and prints the result.
 
 Options:
+```
   --ipset-reduce PERCENT        acceptable % increase in entries  (default 20)
   --ipset-reduce-entries ENTRIES minimum acceptable entries        (default 16384)
   --only-v6 / -6                process only IPv6 prefixes
   --only-v4 / -4                process only IPv4 prefixes
   --print-stats / -v            print reduction statistics to stderr
   --help / -h                   show this help and exit
-"""
+```
