@@ -33,6 +33,14 @@ Options:
   --ipset-reduce-entries ENTRIES minimum acceptable entries        (default 16384)
   --only-v6 / -6                process only IPv6 prefixes
   --only-v4 / -4                process only IPv4 prefixes
+  --print-prefix STRING         print STRING before each output entry
+                                (sets both --print-prefix-ips and -nets)
+  --print-prefix-ips STRING     print STRING before single-host entries only
+  --print-prefix-nets STRING    print STRING before subnet entries only
+  --print-suffix STRING         print STRING after each output entry
+                                (sets both --print-suffix-ips and -nets)
+  --print-suffix-ips STRING     print STRING after single-host entries only
+  --print-suffix-nets STRING    print STRING after subnet entries only
   --print-stats / -v            print reduction statistics to stderr
   --help / -h                   show this help and exit
 ```
