@@ -19,7 +19,7 @@ Algorithm (faithful port of iprange's ipset_reduce.c):
 
 Dependencies:
   - Python >=3.4   (ipaddress module)
-  - aggregate6     (system command, used for initial aggregation)
+  - aggregate6     (`https://github.com/job/aggregate6`)
 
 Usage:
   ipset-reduce6 [OPTIONS] [FILE ...]
