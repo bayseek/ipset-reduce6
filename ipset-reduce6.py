@@ -2,14 +2,17 @@
 # -*- coding: utf-8 -*-
 """
 ipset-reduce6 — IPv6 (and IPv4) CIDR prefix reducer for ipset hash:net
+                      (no external dependencies)
 
 Replicates the --ipset-reduce / --ipset-reduce-entries logic of
 FireHOL's `iprange` (which is IPv4-only) and extends it to IPv6.
+Unlike ipset-reduce6, this variant uses Python's stdlib
+ipaddress.collapse_addresses() instead of shelling out to aggregate6.
 
 Algorithm (faithful port of iprange's ipset_reduce.c):
 
   1.  Read all prefixes from files/stdin.
-  2.  Aggregate them (merge overlapping/adjacent) via `aggregate6`.
+  2.  Aggregate them (merge overlapping/adjacent) via collapse_addresses().
   3.  Count how many CIDR entries each prefix-length produces.
   4.  Compute an acceptable ceiling:
         acceptable = max(total * (1 + reduce_pct/100), reduce_entries)
@@ -20,9 +23,7 @@ Algorithm (faithful port of iprange's ipset_reduce.c):
       print the result.
 
 Dependencies:
-  - Python >=3.4   (ipaddress module)
-  - aggregate6     (system command, used for initial aggregation; 
-                    https://github.com/job/aggregate6)
+  - Python >=3.4   (ipaddress module from stdlib — nothing else)
 
 Usage:
   ipset-reduce6 [OPTIONS] [FILE ...]
@@ -51,10 +52,9 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
-import subprocess
 import sys
 from collections import defaultdict
-from typing import List, Tuple, Union
+from typing import List, Union
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -63,34 +63,17 @@ IPNetwork = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
 
 
 # ---------------------------------------------------------------------------
-# Aggregation via aggregate6
+# Aggregation via stdlib  (replaces aggregate6)
 # ---------------------------------------------------------------------------
 
-def aggregate_prefixes(lines: List[str], family: str | None = None) -> List[IPNetwork]:
-    """Call aggregate6 to merge overlapping/adjacent prefixes."""
-    cmd = ["aggregate6"]
-    if family == "6":
-        cmd.append("-6")
-    elif family == "4":
-        cmd.append("-4")
+def aggregate_prefixes(networks: List[IPNetwork]) -> List[IPNetwork]:
+    """Merge overlapping/adjacent prefixes using Python's stdlib.
 
-    proc = subprocess.run(
-        cmd,
-        input="\n".join(lines) + "\n",
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        print(f"aggregate6 error: {proc.stderr.strip()}", file=sys.stderr)
-        sys.exit(1)
-
-    result: List[IPNetwork] = []
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        result.append(ipaddress.ip_network(line, strict=False))
-    return result
+    ipaddress.collapse_addresses() requires all networks to be of the
+    same IP version, so callers must pre-separate v4/v6.  It handles
+    overlaps, containment and adjacency — exactly like aggregate6.
+    """
+    return list(ipaddress.collapse_addresses(networks))
 
 
 # ---------------------------------------------------------------------------
@@ -123,28 +106,6 @@ def split_net_enabled(net: IPNetwork, enabled: set[int]) -> List[IPNetwork]:
     return result
 
 
-def count_entries_for_net(net: IPNetwork, enabled: set[int]) -> dict[int, int]:
-    """Count how many entries each prefix-length produces for a single net."""
-    counters: dict[int, int] = defaultdict(int)
-    for sub in split_net_enabled(net, enabled):
-        counters[sub.prefixlen] += 1
-    return dict(counters)
-
-
-# ---------------------------------------------------------------------------
-# Count prefixes produced by current enabled set
-# ---------------------------------------------------------------------------
-
-def count_prefixes(networks: List[IPNetwork],
-                   enabled: set[int]) -> dict[int, int]:
-    """Return {prefix_length: count} for the full network list."""
-    counters: dict[int, int] = defaultdict(int)
-    for net in networks:
-        for sub in split_net_enabled(net, enabled):
-            counters[sub.prefixlen] += 1
-    return dict(counters)
-
-
 # ---------------------------------------------------------------------------
 # The reduction algorithm  (port of ipset_reduce() from ipset_reduce.c)
 # ---------------------------------------------------------------------------
@@ -157,14 +118,12 @@ def ipset_reduce(networks: List[IPNetwork], reduce_pct: int,
 
     Returns a set of enabled prefix-length ints.
     """
-    enabled: set[int] = set(range(max_prefix + 1))
-
     # --- initial count (each aggregated CIDR is exactly 1 entry) ---
     counters: dict[int, int] = defaultdict(int)
     for net in networks:
         counters[net.prefixlen] += 1
 
-    # disable prefixes that have zero entries
+    # only keep prefixes that actually appear
     present_prefixes = set(counters.keys())
     enabled = present_prefixes.copy()
 
@@ -262,8 +221,7 @@ def main() -> None:
         description=(
             "Reduce the number of distinct CIDR prefix-lengths in an IP set, "
             "trading a bounded increase in entry count for fewer unique masks. "
-            "Works with both IPv4 and IPv6. "
-            "Requires 'aggregate6' for initial prefix merging."
+            "Works with both IPv4 and IPv6.  No external dependencies."
         ),
     )
     parser.add_argument(
@@ -334,8 +292,9 @@ def main() -> None:
     else:
         raw_lines = sys.stdin.read().splitlines()
 
-    # strip comments and blanks
-    clean: List[str] = []
+    # strip comments and blanks, parse into network objects
+    v4_nets: List[ipaddress.IPv4Network] = []
+    v6_nets: List[ipaddress.IPv6Network] = []
     for line in raw_lines:
         line = line.strip()
         if not line or line.startswith("#") or line.startswith(";"):
@@ -350,10 +309,14 @@ def main() -> None:
                 continue
         else:
             line = parts[0]
-        clean.append(line)
-
-    if not clean:
-        sys.exit(0)
+        try:
+            net = ipaddress.ip_network(line, strict=False)
+            if isinstance(net, ipaddress.IPv4Network):
+                v4_nets.append(net)
+            else:
+                v6_nets.append(net)
+        except ValueError:
+            print(f"WARNING: skipping invalid entry: {line}", file=sys.stderr)
 
     # ---- determine family filter ----
     family_filter: str | None = None
@@ -362,46 +325,31 @@ def main() -> None:
     elif args.only_v4:
         family_filter = "4"
 
-    # ---- separate v4 / v6 ----
-    v4_lines: List[str] = []
-    v6_lines: List[str] = []
-    for cidr in clean:
-        try:
-            net = ipaddress.ip_network(cidr, strict=False)
-            if net.version == 4:
-                v4_lines.append(str(net))
-            else:
-                v6_lines.append(str(net))
-        except ValueError:
-            print(f"WARNING: skipping invalid entry: {cidr}", file=sys.stderr)
-
-    results: List[str] = []
+    results: List[IPNetwork] = []
 
     # ---- process IPv4 if applicable ----
-    if v4_lines and family_filter in (None, "4"):
+    if v4_nets and family_filter in (None, "4"):
         if verbose:
-            print(f"=== IPv4: {len(v4_lines)} raw prefixes ===", file=sys.stderr)
-        nets4 = aggregate_prefixes(v4_lines, "4")
+            print(f"=== IPv4: {len(v4_nets)} raw prefixes ===", file=sys.stderr)
+        nets4 = aggregate_prefixes(v4_nets)
         if verbose:
             print(f"After aggregation: {len(nets4)} prefixes", file=sys.stderr)
         enabled4 = ipset_reduce(nets4, args.reduce_pct, args.reduce_entries,
                                 max_prefix=32, verbose=verbose)
         for net in nets4:
-            for sub in split_net_enabled(net, enabled4):
-                results.append(str(sub))
+            results.extend(split_net_enabled(net, enabled4))
 
     # ---- process IPv6 if applicable ----
-    if v6_lines and family_filter in (None, "6"):
+    if v6_nets and family_filter in (None, "6"):
         if verbose:
-            print(f"=== IPv6: {len(v6_lines)} raw prefixes ===", file=sys.stderr)
-        nets6 = aggregate_prefixes(v6_lines, "6")
+            print(f"=== IPv6: {len(v6_nets)} raw prefixes ===", file=sys.stderr)
+        nets6 = aggregate_prefixes(v6_nets)
         if verbose:
             print(f"After aggregation: {len(nets6)} prefixes", file=sys.stderr)
         enabled6 = ipset_reduce(nets6, args.reduce_pct, args.reduce_entries,
                                 max_prefix=128, verbose=verbose)
         for net in nets6:
-            for sub in split_net_enabled(net, enabled6):
-                results.append(str(sub))
+            results.extend(split_net_enabled(net, enabled6))
 
     # ---- output (with prefix/suffix decoration) ----
     pfx_ips  = args.print_prefix_ips
@@ -409,13 +357,13 @@ def main() -> None:
     sfx_ips  = args.print_suffix_ips
     sfx_nets = args.print_suffix_nets
 
-    for r in results:
-        net = ipaddress.ip_network(r, strict=False)
+    for net in results:
+        entry = str(net)
         is_host = (net.prefixlen == net.max_prefixlen)  # /32 or /128
         if is_host:
-            print(f"{pfx_ips}{r}{sfx_ips}")
+            print(f"{pfx_ips}{entry}{sfx_ips}")
         else:
-            print(f"{pfx_nets}{r}{sfx_nets}")
+            print(f"{pfx_nets}{entry}{sfx_nets}")
 
 
 if __name__ == "__main__":
