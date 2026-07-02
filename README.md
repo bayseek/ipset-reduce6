@@ -2,12 +2,12 @@
 IPv6 (and IPv4) CIDR prefix reducer for ipset hash:net
 
 Replicates the --ipset-reduce / --ipset-reduce-entries logic of
-FireHOL's `iprange` (which is IPv4-only) and extends it to IPv6.
+FireHOL's `iprange` (which <del>is</del> has been IPv4-only until April, 4 2026) and extends it to IPv6.
 
 Algorithm (faithful port of iprange's ipset_reduce.c):
 
   1.  Read all prefixes from files/stdin.
-  2.  Aggregate them (merge overlapping/adjacent) via `aggregate6`.
+  2.  <del>Aggregate them (merge overlapping/adjacent) via `aggregate6`.</del>
   3.  Count how many CIDR entries each prefix-length produces.
   4.  Compute an acceptable ceiling:
         acceptable = max(total * (1 + reduce_pct/100), reduce_entries)
